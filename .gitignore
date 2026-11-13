@@ -1,0 +1,25 @@
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+.env.*
+
+# Uploaded documents (keep folder structure)
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# Local Qdrant database
+backend/qdrant_storage/
+
+# Model and application caches
+.cache/
+.pytest_cache/
