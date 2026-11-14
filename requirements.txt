@@ -3,4 +3,7 @@ uvicorn[standard]
 python-multipart
 pypdf
 python-docx
+sentence-transformers
+qdrant-client
+langchain-text-splitters
 cryptography

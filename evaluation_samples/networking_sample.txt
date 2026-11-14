@@ -1,0 +1,17 @@
+
+COMPUTER NETWORKING FUNDAMENTALS
+
+Computer Networks:
+A computer network is a group of interconnected devices that communicate and share resources. Networks allow computers to exchange data, access shared files, and use common services.
+
+Network Types:
+A Local Area Network (LAN) connects devices within a limited geographical area such as an office, laboratory, or building. A Wide Area Network (WAN) connects devices across larger geographical regions. The Internet is the largest example of a WAN.
+
+Network Devices:
+A router forwards data packets between different networks and selects an appropriate path for transmission. A switch connects devices within a local area network and forwards frames using MAC addresses. A hub broadcasts incoming data to all connected ports.
+
+Network Protocols:
+TCP provides reliable, connection-oriented data transmission. UDP provides connectionless communication with lower overhead. HTTP is used for transferring web resources, while DNS translates domain names into IP addresses.
+
+IP Addressing:
+An IP address identifies a device on an IP network. IPv4 addresses use 32 bits, while IPv6 addresses use 128 bits. A subnet mask helps identify the network and host portions of an IPv4 address.
