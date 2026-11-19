@@ -1,6 +1,7 @@
 
 from pathlib import Path
 from uuid import uuid4
+import hashlib
 
 UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads"
 
@@ -25,7 +26,31 @@ def save_uploaded_document(filename: str, content: bytes):
 
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Generate a unique name to avoid filename conflicts.
+    # Calculate a fingerprint to detect identical uploaded files.
+    file_hash = hashlib.sha256(content).hexdigest()
+
+    # Check existing files, newest first, before saving another copy.
+    existing_files = sorted(
+        UPLOAD_DIR.glob(f"*{extension}"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True
+    )
+
+    for existing_file in existing_files:
+        existing_hash = hashlib.sha256(
+            existing_file.read_bytes()
+        ).hexdigest()
+
+        if existing_hash == file_hash:
+            return {
+                "original_filename": Path(filename).name,
+                "stored_filename": existing_file.name,
+                "file_size": len(content),
+                "file_type": extension.lstrip("."),
+                "duplicate": True
+            }
+
+    # Save new content only when no identical file exists.
     stored_filename = f"{uuid4().hex}{extension}"
     file_path = UPLOAD_DIR / stored_filename
 
@@ -36,5 +61,6 @@ def save_uploaded_document(filename: str, content: bytes):
         "original_filename": Path(filename).name,
         "stored_filename": stored_filename,
         "file_size": len(content),
-        "file_type": extension.lstrip(".")
+        "file_type": extension.lstrip("."),
+        "duplicate": False
     }

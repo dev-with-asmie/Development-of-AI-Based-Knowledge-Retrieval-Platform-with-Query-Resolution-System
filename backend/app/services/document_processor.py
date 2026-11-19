@@ -1,8 +1,11 @@
 
+from pathlib import Path
+
 from backend.app.services.document_extractor import extract_text
 from backend.app.services.text_chunker import (
     clean_text,
-    split_text_into_chunks
+    split_text_into_chunks,
+    split_csv_into_chunks
 )
 from backend.app.services.embedding_service import generate_embeddings
 
@@ -13,16 +16,16 @@ def process_document(stored_filename: str) -> dict:
     for an uploaded document.
     """
 
-    # Step 1: Extract text
     extracted_text = extract_text(stored_filename)
-
-    # Step 2: Clean extracted text
     cleaned_text = clean_text(extracted_text)
 
-    # Step 3: Generate chunks
-    chunks = split_text_into_chunks(cleaned_text)
+    extension = Path(stored_filename).suffix.lower()
 
-    # Step 4: Generate embeddings
+    if extension == ".csv":
+        chunks = split_csv_into_chunks(cleaned_text)
+    else:
+        chunks = split_text_into_chunks(cleaned_text)
+
     embeddings = generate_embeddings(chunks)
 
     return {
