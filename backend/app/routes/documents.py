@@ -7,6 +7,8 @@ from backend.app.services.document_service import save_uploaded_document
 from backend.app.services.retrieval_service import retrieve_relevant_chunks
 from backend.app.services.ingestion_service import ingest_document
 
+from backend.app.agents.orchestration_agent import process_query
+
 
 router = APIRouter(
     prefix="/documents",
@@ -14,8 +16,14 @@ router = APIRouter(
 )
 
 
-# Request format for document questions
+# Request format for document retrieval
 class RetrievalRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+    top_k: int = Field(default=5, ge=1, le=10)
+
+
+# Request format for multi-agent question answering
+class AskRequest(BaseModel):
     query: str = Field(..., min_length=1)
     top_k: int = Field(default=5, ge=1, le=10)
 
@@ -23,7 +31,6 @@ class RetrievalRequest(BaseModel):
 # Endpoint 1: Upload a document
 @router.post("/upload")
 async def upload_document(file: UploadFile = File(...)):
-
     try:
         content = await file.read(20 * 1024 * 1024 + 1)
 
@@ -48,7 +55,6 @@ async def upload_document(file: UploadFile = File(...)):
 # Endpoint 2: Extract text
 @router.get("/{stored_filename}/extract")
 def extract_document_text(stored_filename: str):
-
     try:
         text = extract_text(stored_filename)
 
@@ -69,7 +75,6 @@ def extract_document_text(stored_filename: str):
 # Endpoint 3: Process and index document
 @router.post("/{stored_filename}/process")
 def process_uploaded_document(stored_filename: str):
-
     try:
         result = ingest_document(stored_filename)
         return result
@@ -82,9 +87,9 @@ def process_uploaded_document(stored_filename: str):
 
 
 # Endpoint 4: Ask a question and retrieve relevant chunks
+# Existing retrieval-only endpoint retained for compatibility
 @router.post("/query")
 def query_documents(request: RetrievalRequest):
-
     try:
         results = retrieve_relevant_chunks(
             query=request.query.strip(),
@@ -97,6 +102,21 @@ def query_documents(request: RetrievalRequest):
             "results_count": len(results),
             "results": results
         }
+
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
+
+# Endpoint 5: Ask a question using the multi-agent workflow
+@router.post("/ask")
+def ask_documents(request: AskRequest):
+    try:
+        result = process_query(
+            query=request.query.strip(),
+            top_k=request.top_k
+        )
+
+        return result
 
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))

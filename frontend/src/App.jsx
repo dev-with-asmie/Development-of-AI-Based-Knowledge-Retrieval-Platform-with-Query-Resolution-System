@@ -1,4 +1,5 @@
 
+
 import { useState } from 'react'
 import {
   LayoutDashboard, Files, MessageSquare, Search, Activity,
@@ -147,6 +148,10 @@ function App() {
   const [queryCount, setQueryCount] = useState(0)
   const [queryHistory, setQueryHistory] = useState([])
 
+  const [generatedAnswer, setGeneratedAnswer] = useState('')
+  const [clarificationMessage, setClarificationMessage] = useState('')
+  const [generationNotice, setGenerationNotice] = useState('')
+
   const [uploading, setUploading] = useState(false)
   const [uploadMessage, setUploadMessage] = useState('')
   const [uploadErrors, setUploadErrors] = useState([])
@@ -278,11 +283,14 @@ function App() {
     setSearching(true)
     setQueryError('')
     setQueryResults([])
+    setGeneratedAnswer('')
+    setClarificationMessage('')
+    setGenerationNotice('')
     setSearchedQuestion(currentQuestion)
 
     try {
       const response = await fetch(
-        `${API_URL}/documents/query`,
+        `${API_URL}/documents/ask`,
         {
           method: 'POST',
           headers: {
@@ -300,11 +308,12 @@ function App() {
 
       if (!response.ok) {
         throw new Error(
-          data.detail || 'Unable to search documents.'
+          data.detail || 'Unable to process your question.'
         )
       }
 
-      const results = data.results || []
+      const results = data.retrieval?.results || []
+      const responseData = data.response || {}
 
       setQueryResults(results)
       setQueryCount(previous => previous + 1)
@@ -321,10 +330,40 @@ function App() {
         ...previous,
       ].slice(0, 8))
 
-      if (results.length === 0) {
+      if (
+        data.status === 'clarification_required' ||
+        responseData.status === 'clarification_required'
+      ) {
+        setClarificationMessage(
+          data.clarification?.clarification_question ||
+          responseData.answer ||
+          'Could you provide a little more detail so I can search the right information?'
+        )
+      } else if (
+        responseData.status === 'generated' &&
+        typeof responseData.answer === 'string' &&
+        responseData.answer.trim()
+      ) {
+        setGeneratedAnswer(responseData.answer)
+      } else if (
+        responseData.status === 'generation_failed' ||
+        data.status === 'generation_failed'
+      ) {
+        setGenerationNotice(
+          responseData.message ||
+          'Relevant document passages were retrieved, but the answer-generation service is temporarily unavailable. You can still review the source evidence below.'
+        )
+      } else if (
+        data.status === 'no_relevant_results' ||
+        results.length === 0
+      ) {
         setQueryError(
+          data.message ||
           'No matching information was found in the indexed documents. Try rephrasing your question or uploading relevant documents.'
         )
+      } else if (typeof responseData.answer === 'string' && responseData.answer.trim()) {
+        // Display a useful backend response even if it uses a non-standard status.
+        setGeneratedAnswer(responseData.answer)
       }
 
     } catch (error) {
@@ -893,8 +932,8 @@ function App() {
             </h2>
 
             <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
-              Search across your indexed documents using natural-language questions.
-              The system retrieves relevant passages and shows their original sources.
+              Ask natural-language questions and let the query-understanding, retrieval,
+              clarification and response-generation workflow search your indexed sources.
             </p>
           </div>
 
@@ -1013,9 +1052,66 @@ function App() {
                 </p>
 
                 <p className="mt-1 text-xs text-slate-500">
-                  Retrieving relevant document passages...
+                  Understanding your question, retrieving evidence and preparing a grounded response...
                 </p>
               </div>
+            </div>
+          )}
+
+          {/* CLARIFICATION REQUEST */}
+
+          {clarificationMessage && (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-5">
+              <div className="flex items-center gap-2">
+                <CircleHelp
+                  className="text-amber-300"
+                  size={18}
+                />
+                <p className="text-sm font-semibold text-amber-200">
+                  A little more detail is needed
+                </p>
+              </div>
+
+              <p className="mt-2 text-sm leading-6 text-amber-100/90">
+                {clarificationMessage}
+              </p>
+            </div>
+          )}
+
+          {/* GENERATED ANSWER */}
+
+          {generatedAnswer && (
+            <div className="rounded-2xl border border-violet-500/30 bg-gradient-to-br from-violet-500/10 to-slate-900 p-5 sm:p-6">
+              <div className="mb-3 flex items-center gap-2">
+                <Sparkles
+                  className="text-violet-300"
+                  size={18}
+                />
+                <h3 className="text-sm font-semibold text-violet-200">
+                  AI-generated response
+                </h3>
+                <span className="ml-auto rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] text-emerald-300">
+                  Grounded in retrieved evidence
+                </span>
+              </div>
+
+              <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">
+                {generatedAnswer}
+              </div>
+            </div>
+          )}
+
+          {/* GENERATION SERVICE NOTICE */}
+
+          {generationNotice && (
+            <div className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">
+              <CircleHelp
+                className="mt-0.5 shrink-0 text-amber-400"
+                size={18}
+              />
+              <p className="text-sm leading-6 text-amber-200">
+                {generationNotice}
+              </p>
             </div>
           )}
 
@@ -1052,14 +1148,14 @@ function App() {
                   />
 
                   <p className="text-sm font-medium text-cyan-300">
-                    Retrieval results
+                    Retrieved source evidence
                   </p>
                 </div>
 
                 <p className="mt-2 text-xs leading-6 text-slate-400">
-                  The passages below were retrieved from your indexed knowledge base.
-                  Structured CSV records are displayed in tables, while document passages
-                  retain their original text and formatting.
+                  These passages were selected by the retrieval agent from your indexed
+                  knowledge base. Review the original source content to verify the response.
+                  Structured CSV records are displayed in tables.
                 </p>
               </div>
 
@@ -1067,16 +1163,6 @@ function App() {
                 {queryResults.map((result, index) =>
                   renderResultCard(result, index)
                 )}
-              </div>
-
-              <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-                <p className="text-xs leading-6 text-slate-400">
-                  <strong className="text-slate-300">
-                    Important:
-                  </strong>{' '}
-                  These are retrieved document passages, not AI-generated answers.
-                  An answer generation model is not currently connected to this interface.
-                </p>
               </div>
 
               <button

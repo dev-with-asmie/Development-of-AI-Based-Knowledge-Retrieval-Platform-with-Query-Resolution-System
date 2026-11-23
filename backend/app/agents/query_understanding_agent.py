@@ -62,6 +62,7 @@ FACTUAL_PATTERNS = [
     r"\bwhich\b",
     r"\bhow many\b",
     r"\bhow much\b",
+    r"\bhow long\b",
     r"\bstatus\b",
     r"\blist\b",
     r"\bshow\b",
