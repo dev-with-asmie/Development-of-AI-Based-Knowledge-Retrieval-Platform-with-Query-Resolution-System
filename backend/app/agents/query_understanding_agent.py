@@ -91,6 +91,10 @@ AMBIGUOUS_PHRASES = {
     "more details",
     "help me",
     "can you explain",
+    "tell me about the issue",
+    "tell me about this issue",
+    "tell me about that issue",
+    "explain the issue",
 }
 
 
