@@ -1,4 +1,4 @@
-
+﻿
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from pydantic import BaseModel, Field
 
@@ -23,9 +23,19 @@ class RetrievalRequest(BaseModel):
 
 
 # Request format for multi-agent question answering
+# Updated for M3.1 clarification conversations
 class AskRequest(BaseModel):
     query: str = Field(..., min_length=1)
     top_k: int = Field(default=5, ge=1, le=10)
+
+    # Identifies an existing pending clarification conversation
+    conversation_id: str | None = None
+
+    # User's answer to the clarification question
+    clarification_response: str | None = None
+
+    # Allows the user to cancel a pending clarification
+    cancel_clarification: bool = False
 
 
 # Endpoint 1: Upload a document
@@ -108,15 +118,19 @@ def query_documents(request: RetrievalRequest):
 
 
 # Endpoint 5: Ask a question using the multi-agent workflow
+# Supports initial questions, clarification responses, and cancellation
 @router.post("/ask")
 def ask_documents(request: AskRequest):
     try:
         result = process_query(
             query=request.query.strip(),
-            top_k=request.top_k
+            top_k=request.top_k,
+            conversation_id=request.conversation_id,
+            clarification_response=request.clarification_response,
         )
 
         return result
 
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
+

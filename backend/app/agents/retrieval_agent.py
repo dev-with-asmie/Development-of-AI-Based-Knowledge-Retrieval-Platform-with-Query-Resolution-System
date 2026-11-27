@@ -26,136 +26,128 @@ def retrieve_with_agent(
     min_relevance_score: float = DEFAULT_MIN_RELEVANCE_SCORE,
     allowed_filenames: list[str] | None = None
 ) -> dict:
-    """
-    Retrieve and filter relevant document chunks.
 
-    Uses the existing M1 hybrid retrieval service and
-    applies additional semantic relevance filtering.
-    """
-
-    # 1. Validate inputs.
+    # Validate query
     if not query or not query.strip():
         raise ValueError("Query cannot be empty.")
 
+    # Validate classification
     if not isinstance(classification, dict):
         raise ValueError("Classification must be a dictionary.")
 
-    if top_k <= 0:
-        raise ValueError("top_k must be greater than zero.")
+    # Validate top_k
+    if not isinstance(top_k, int) or isinstance(top_k, bool):
+        raise ValueError("top_k must be an integer.")
+
+    if top_k <= 0 or top_k > 10:
+        raise ValueError("top_k must be between 1 and 10.")
+
+    # Validate relevance threshold
+    if not isinstance(min_relevance_score, (int, float)):
+        raise ValueError("Minimum relevance score must be numeric.")
 
     if not 0 <= min_relevance_score <= 1:
         raise ValueError(
             "Minimum relevance score must be between 0 and 1."
         )
 
-    # 2. Read classification.
     query_type = classification.get("query_type")
 
+    # Handle ambiguous queries
     if query_type == "ambiguous":
         return {
-            "success": True,
-            "query": query,
-            "query_type": "ambiguous",
             "status": "clarification_required",
-            "message": (
-                "The query is ambiguous. "
-                "Please clarify it before retrieval."
-            ),
-            "results_count": 0,
-            "retrieval_confidence": 0.0,
-            "results": []
+            "query": query,
+            "query_type": query_type,
+            "results": [],
+            "result_count": 0,
+            "confidence": 0.0
         }
 
+    # Validate supported query type
     if query_type not in SUPPORTED_QUERY_TYPES:
         raise ValueError(
             f"Unsupported query type: {query_type}"
         )
 
-    min_similarity_score = SEMANTIC_THRESHOLDS[query_type]
+    semantic_threshold = SEMANTIC_THRESHOLDS[query_type]
 
-    # 3. Retrieve extra candidates to allow filtering.
+    # Retrieve more candidates before filtering
     retrieved_chunks = retrieve_relevant_chunks(
         query=query.strip(),
         top_k=top_k * 3,
         allowed_filenames=allowed_filenames
     )
 
-    # 4. Apply relevance and semantic filtering.
-    filtered_results = []
+    results = []
 
     for result in retrieved_chunks:
 
-        relevance_score = result.get("relevance_score")
+        relevance_score = float(
+            result.get("relevance_score") or 0.0
+        )
+
         similarity_score = result.get("similarity_score")
 
-        if relevance_score is None:
-            continue
-
+        # Apply minimum relevance threshold
         if relevance_score < min_relevance_score:
             continue
 
-        # Structured CSV results have no semantic score.
-        # Preserve them because they use field-aware filtering.
+        # Apply semantic threshold when a semantic score exists.
+        # Structured CSV records may not have a similarity score,
+        # so they are evaluated using their relevance score.
         if similarity_score is not None:
-            if similarity_score < min_similarity_score:
+            similarity_score = float(similarity_score)
+
+            if similarity_score < semantic_threshold:
                 continue
 
-        filtered_results.append({
-            "rank": len(filtered_results) + 1,
-            "source": result.get("filename"),
+        filename = result.get("filename") or result.get("source")
+
+        normalized_result = {
+            "rank": len(results) + 1,
+
+            # Both fields are retained for compatibility.
+            "filename": filename,
+            "source": filename,
+
             "chunk_index": result.get("chunk_index"),
-            "text": result.get("text"),
+            "text": result.get("text", ""),
+
             "similarity_score": similarity_score,
-            "keyword_score": result.get("keyword_score"),
+            "keyword_score": result.get("keyword_score", 0.0),
             "relevance_score": relevance_score,
-            "matched_records": result.get("matched_records")
-        })
 
-        if len(filtered_results) >= top_k:
-            break
-
-    # 5. Calculate aggregate retrieval confidence.
-    if filtered_results:
-        retrieval_confidence = round(
-            sum(
-                item["relevance_score"]
-                for item in filtered_results
-            ) / len(filtered_results),
-            4
-        )
-    else:
-        retrieval_confidence = 0.0
-
-    # 6. Handle unavailable information.
-    if not filtered_results:
-        return {
-            "success": True,
-            "query": query,
-            "query_type": query_type,
-            "status": "no_relevant_results",
-            "message": (
-                "No sufficiently relevant document chunks "
-                "were found for this query."
-            ),
-            "results_count": 0,
-            "retrieval_confidence": 0.0,
-            "minimum_relevance_score": min_relevance_score,
-            "minimum_similarity_score": min_similarity_score,
-            "results": []
+            "matched_records": result.get("matched_records", 0)
         }
 
-    # 7. Return structured retrieval response.
+        results.append(normalized_result)
+
+        if len(results) >= top_k:
+            break
+
+    # Calculate average retrieval confidence
+    if results:
+        confidence = sum(
+            item["relevance_score"] for item in results
+        ) / len(results)
+    else:
+        confidence = 0.0
+
+    # Return retrieval result
     return {
-        "success": True,
+        "status": (
+            "retrieved"
+            if results
+            else "no_relevant_results"
+        ),
         "query": query,
         "query_type": query_type,
-        "status": "retrieved",
-        "message": (
-            "Relevant document chunks retrieved successfully."
-        ),
-        "results_count": len(filtered_results),
-        "retrieval_confidence": retrieval_confidence,
-        "minimum_relevance_score": min_relevance_score,
-        "minimum_similarity_score": min_similarity_score,
-        "results": filtered_results
+        "results": results,
+        "result_count": len(results),
+        "confidence": round(confidence, 4),
+        "thresholds": {
+            "minimum_relevance_score": min_relevance_score,
+            "minimum_semantic_score": semantic_threshold
+        }
     }

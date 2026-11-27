@@ -1,15 +1,14 @@
 
-
 import { useState } from 'react'
 import {
   LayoutDashboard, Files, MessageSquare, Search, Activity,
   Settings, Plus, ArrowUpRight, Database, FileText,
   Sparkles, ChevronRight, UploadCloud, CheckCircle2, Zap,
   Menu, X, Send, Loader2, Clock3, Layers3, CircleHelp,
-  Server, BrainCircuit, Filter, Copy, Check
+  Server, BrainCircuit, Filter, Copy, Check, Mic, Volume2, VolumeX, Square
 } from 'lucide-react'
 
-const API_URL = 'http://127.0.0.1:8000'
+const API_URL = 'http://127.0.0.1:8001'
 
 const navigation = [
   { name: 'Overview', icon: LayoutDashboard },
@@ -152,6 +151,18 @@ function App() {
   const [clarificationMessage, setClarificationMessage] = useState('')
   const [generationNotice, setGenerationNotice] = useState('')
 
+  // Persistent ID for normal multi-turn conversation memory.
+  const [conversationId, setConversationId] = useState(null)
+
+  // Separate ID for a question currently waiting for clarification.
+  const [pendingConversationId, setPendingConversationId] = useState(null)
+  const [pendingOriginalQuestion, setPendingOriginalQuestion] = useState('')
+  const [isListening, setIsListening] = useState(false)
+  const [voiceError, setVoiceError] = useState('')
+  const [isSpeaking, setIsSpeaking] = useState(false)
+  const [answerSources, setAnswerSources] = useState([])
+  const [retrievalConfidence, setRetrievalConfidence] = useState(null)
+
   const [uploading, setUploading] = useState(false)
   const [uploadMessage, setUploadMessage] = useState('')
   const [uploadErrors, setUploadErrors] = useState([])
@@ -280,31 +291,51 @@ function App() {
 
     if (!currentQuestion || searching) return
 
+    const isClarificationReply = Boolean(pendingConversationId)
+    const originalQuestion = isClarificationReply
+      ? pendingOriginalQuestion
+      : currentQuestion
+
     setSearching(true)
     setQueryError('')
     setQueryResults([])
     setGeneratedAnswer('')
-    setClarificationMessage('')
     setGenerationNotice('')
-    setSearchedQuestion(currentQuestion)
+
+    if (!isClarificationReply) {
+      setClarificationMessage('')
+      setSearchedQuestion(currentQuestion)
+    }
 
     try {
-      const response = await fetch(
-        `${API_URL}/documents/ask`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-          },
-          body: JSON.stringify({
-            query: currentQuestion,
-            top_k: 5,
-          }),
-        }
-      )
+      const requestBody = {
+        query: originalQuestion,
+        top_k: 5,
+        // Reuse the same ID for normal follow-up questions.
+        conversation_id: isClarificationReply
+          ? pendingConversationId
+          : conversationId,
+      }
+
+      if (isClarificationReply) {
+        requestBody.clarification_response = currentQuestion
+      }
+
+      const response = await fetch(`${API_URL}/documents/ask`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      })
 
       const data = await response.json()
+
+      // Keep the backend-issued conversation ID for subsequent turns.
+      if (data.conversation_id) {
+        setConversationId(data.conversation_id)
+      }
 
       if (!response.ok) {
         throw new Error(
@@ -314,13 +345,35 @@ function App() {
 
       const results = data.retrieval?.results || []
       const responseData = data.response || {}
+      const resultStatus = data.status || responseData.status
+      setAnswerSources(Array.isArray(responseData.sources) ? responseData.sources : [])
+      setRetrievalConfidence(
+        data.retrieval?.confidence ??
+        data.retrieval?.retrieval_confidence ??
+        responseData.retrieval_confidence ?? null
+      )
+
+      // After a clarification reply, show the actual refined query used
+      // by the backend retrieval pipeline instead of leaving the original
+      // vague question (for example, "why?") in the evidence heading.
+      if (isClarificationReply) {
+        setSearchedQuestion(
+          data.refined_query ||
+          data.retrieval?.query ||
+          `${originalQuestion} ${currentQuestion}`.trim()
+        )
+      }
 
       setQueryResults(results)
       setQueryCount(previous => previous + 1)
 
+      const historyLabel = isClarificationReply
+        ? `${originalQuestion} → ${currentQuestion}`
+        : currentQuestion
+
       setQueryHistory(previous => [
         {
-          question: currentQuestion,
+          question: historyLabel,
           resultCount: results.length,
           time: new Date().toLocaleTimeString([], {
             hour: '2-digit',
@@ -330,40 +383,83 @@ function App() {
         ...previous,
       ].slice(0, 8))
 
-      if (
-        data.status === 'clarification_required' ||
-        responseData.status === 'clarification_required'
-      ) {
+      // Handle expired sessions before checking whether retrieval returned results.
+      if (resultStatus === 'clarification_expired') {
+        setPendingConversationId(null)
+        setPendingOriginalQuestion('')
+        setClarificationMessage('')
+        setQuestion('')
+        setQueryError(
+          data.message || responseData.answer ||
+          'This clarification session has expired. Please ask your question again.'
+        )
+      } else if (resultStatus === 'clarification_required') {
         setClarificationMessage(
           data.clarification?.clarification_question ||
           responseData.answer ||
           'Could you provide a little more detail so I can search the right information?'
         )
+
+        if (data.conversation_id) {
+          setPendingConversationId(data.conversation_id)
+          setPendingOriginalQuestion(originalQuestion)
+        } else {
+          setQueryError(
+            'The server requested clarification but did not return a conversation ID. Please try asking your question again.'
+          )
+          setPendingConversationId(null)
+          setPendingOriginalQuestion('')
+        }
+
+        setQuestion('')
       } else if (
         responseData.status === 'generated' &&
         typeof responseData.answer === 'string' &&
         responseData.answer.trim()
       ) {
         setGeneratedAnswer(responseData.answer)
+        setClarificationMessage('')
+        setPendingConversationId(null)
+        setPendingOriginalQuestion('')
+        setQuestion('')
       } else if (
-        responseData.status === 'generation_failed' ||
-        data.status === 'generation_failed'
+        resultStatus === 'generation_failed' ||
+        responseData.status === 'generation_failed'
       ) {
         setGenerationNotice(
           responseData.message ||
           'Relevant document passages were retrieved, but the answer-generation service is temporarily unavailable. You can still review the source evidence below.'
         )
+        setClarificationMessage('')
+        setPendingConversationId(null)
+        setPendingOriginalQuestion('')
+        setQuestion('')
       } else if (
-        data.status === 'no_relevant_results' ||
+        resultStatus === 'no_relevant_results' ||
         results.length === 0
       ) {
         setQueryError(
           data.message ||
+          responseData.message ||
           'No matching information was found in the indexed documents. Try rephrasing your question or uploading relevant documents.'
         )
-      } else if (typeof responseData.answer === 'string' && responseData.answer.trim()) {
-        // Display a useful backend response even if it uses a non-standard status.
+        setClarificationMessage('')
+        setPendingConversationId(null)
+        setPendingOriginalQuestion('')
+        setQuestion('')
+      } else if (
+        typeof responseData.answer === 'string' &&
+        responseData.answer.trim()
+      ) {
         setGeneratedAnswer(responseData.answer)
+        setClarificationMessage('')
+        setPendingConversationId(null)
+        setPendingOriginalQuestion('')
+        setQuestion('')
+      } else {
+        setQueryError(
+          'The server returned an unexpected response. Please try again.'
+        )
       }
 
     } catch (error) {
@@ -374,6 +470,68 @@ function App() {
     } finally {
       setSearching(false)
     }
+  }
+
+  // --------------------------------------------------
+  // M3.3 VOICE INPUT AND TEXT-TO-SPEECH
+  // --------------------------------------------------
+
+  function startVoiceInput() {
+    setVoiceError('')
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SpeechRecognition) {
+      setVoiceError('Voice input is not supported in this browser. Please use Chrome or Edge, or type your question.')
+      return
+    }
+
+    const recognition = new SpeechRecognition()
+    recognition.lang = 'en-IN'
+    recognition.continuous = false
+    recognition.interimResults = false
+    recognition.onstart = () => setIsListening(true)
+    recognition.onresult = event => {
+      const transcript = event.results?.[0]?.[0]?.transcript
+      if (transcript) setQuestion(previous => previous ? `${previous} ${transcript}` : transcript)
+    }
+    recognition.onerror = event => {
+      setVoiceError(event.error === 'not-allowed'
+        ? 'Microphone permission was denied. Allow microphone access in your browser settings.'
+        : `Voice input error: ${event.error}. You can type your question instead.`)
+    }
+    recognition.onend = () => setIsListening(false)
+    try {
+      recognition.start()
+    } catch (error) {
+      setIsListening(false)
+      setVoiceError(error.message || 'Could not start voice input.')
+    }
+  }
+
+  function speakAnswer() {
+    if (!generatedAnswer || !('speechSynthesis' in window)) {
+      setVoiceError('Text-to-speech is not available in this browser.')
+      return
+    }
+    window.speechSynthesis.cancel()
+    const utterance = new SpeechSynthesisUtterance(generatedAnswer)
+    utterance.lang = 'en-IN'
+    utterance.onstart = () => setIsSpeaking(true)
+    utterance.onend = () => setIsSpeaking(false)
+    utterance.onerror = () => setIsSpeaking(false)
+    window.speechSynthesis.speak(utterance)
+  }
+
+  function stopSpeaking() {
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel()
+    setIsSpeaking(false)
+  }
+
+  function cancelClarification() {
+    setPendingConversationId(null)
+    setPendingOriginalQuestion('')
+    setClarificationMessage('')
+    setQuestion('')
+    setQueryError('')
   }
 
   // --------------------------------------------------
@@ -953,7 +1111,11 @@ function App() {
                   }
                 }
               }}
-              placeholder="Ask something about your uploaded documents..."
+              placeholder={
+                pendingConversationId
+                  ? 'Enter the additional details requested above...'
+                  : 'Ask something about your uploaded documents...'
+              }
               className="min-h-32 w-full resize-y bg-transparent text-sm leading-7 text-slate-200 outline-none placeholder:text-slate-600"
             />
 
@@ -962,6 +1124,20 @@ function App() {
                 <Search size={14} />
                 Hybrid retrieval · Qdrant
               </span>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={startVoiceInput}
+                  disabled={searching || isListening}
+                  className="flex items-center gap-2 rounded-xl border border-cyan-500/30 px-3 py-2.5 text-xs font-medium text-cyan-300 transition hover:bg-cyan-500/10 disabled:opacity-50"
+                  title="Speak your question"
+                >
+                  <Mic size={15} />
+                  {isListening ? 'Listening...' : 'Voice input'}
+                </button>
+                {isListening && <span className="text-xs text-cyan-300">Speak now...</span>}
+              </div>
 
               <button
                 type="submit"
@@ -978,13 +1154,19 @@ function App() {
                   </>
                 ) : (
                   <>
-                    Search documents
+                    {pendingConversationId ? 'Submit clarification' : 'Search documents'}
                     <Send size={15} />
                   </>
                 )}
               </button>
             </div>
           </form>
+
+          {voiceError && (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs leading-5 text-amber-200">
+              {voiceError}
+            </div>
+          )}
 
           {/* EXAMPLE QUESTIONS */}
 
@@ -1008,7 +1190,7 @@ function App() {
                     setQuestion(example)
                     handleAskQuestion(null, example)
                   }}
-                  disabled={searching}
+                  disabled={searching || Boolean(pendingConversationId)}
                   className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/50 p-3 text-left text-xs text-slate-400 transition hover:border-violet-500/30 hover:bg-slate-900 hover:text-slate-200 disabled:opacity-50"
                 >
                   <span>{example}</span>
@@ -1075,6 +1257,23 @@ function App() {
               <p className="mt-2 text-sm leading-6 text-amber-100/90">
                 {clarificationMessage}
               </p>
+
+              {pendingConversationId && (
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                  <p className="min-w-0 break-words text-xs text-amber-200/70">
+                    Original question: {pendingOriginalQuestion}
+                  </p>
+
+                  <button
+                    type="button"
+                    onClick={cancelClarification}
+                    disabled={searching}
+                    className="shrink-0 rounded-lg border border-amber-500/30 px-3 py-2 text-xs font-medium text-amber-200 transition hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Cancel clarification
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -1093,6 +1292,14 @@ function App() {
                 <span className="ml-auto rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] text-emerald-300">
                   Grounded in retrieved evidence
                 </span>
+                <button
+                  type="button"
+                  onClick={isSpeaking ? stopSpeaking : speakAnswer}
+                  className="flex items-center gap-1.5 rounded-lg border border-violet-500/30 px-3 py-2 text-xs text-violet-200 hover:bg-violet-500/10"
+                >
+                  {isSpeaking ? <VolumeX size={14} /> : <Volume2 size={14} />}
+                  {isSpeaking ? 'Stop' : 'Read aloud'}
+                </button>
               </div>
 
               <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">
@@ -1157,6 +1364,29 @@ function App() {
                   knowledge base. Review the original source content to verify the response.
                   Structured CSV records are displayed in tables.
                 </p>
+                <div className="mt-3 flex flex-wrap gap-3 text-xs text-slate-300">
+                  <span className="rounded-lg border border-cyan-500/20 bg-slate-950/40 px-3 py-2">
+                    Retrieved passages: {queryResults.length}
+                  </span>
+                  <span className="rounded-lg border border-cyan-500/20 bg-slate-950/40 px-3 py-2">
+                    Retrieval confidence: {typeof retrievalConfidence === 'number' ? `${(retrievalConfidence * 100).toFixed(1)}%` : 'Not supplied by API'}
+                  </span>
+                  <span className="rounded-lg border border-cyan-500/20 bg-slate-950/40 px-3 py-2">
+                    Cited sources: {answerSources.length}
+                  </span>
+                </div>
+                {answerSources.length > 0 && (
+                  <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+                    <p className="mb-2 text-xs font-semibold text-slate-300">Answer source references</p>
+                    <div className="flex flex-wrap gap-2">
+                      {answerSources.map((source, sourceIndex) => (
+                        <span key={`${source.source_id || sourceIndex}-${source.filename || ''}`} className="rounded-md border border-violet-500/20 px-2.5 py-1.5 text-xs text-violet-200">
+                          {source.source_id || `Source ${sourceIndex + 1}`} · {source.filename || 'Document'} · chunk {source.chunk_index ?? 'N/A'}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="space-y-4">

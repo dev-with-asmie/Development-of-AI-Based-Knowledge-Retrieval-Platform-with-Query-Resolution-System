@@ -7,7 +7,7 @@ QUERY_TYPES = {
     "factual",
     "procedural",
     "comparative",
-    "ambiguous"
+    "ambiguous",
 }
 
 
@@ -60,9 +60,9 @@ FACTUAL_PATTERNS = [
     r"\bwhen\b",
     r"\bwhere\b",
     r"\bwhich\b",
+    r"\bwhy\b",
     r"\bhow many\b",
     r"\bhow much\b",
-    r"\bhow long\b",
     r"\bstatus\b",
     r"\blist\b",
     r"\bshow\b",
@@ -73,10 +73,15 @@ FACTUAL_PATTERNS = [
     r"\bmeaning\b",
     r"\bgive me\b",
     r"\btell me\b",
+    r"\bexplain\b",
+    r"\breason\b",
+    r"\bcause\b",
 ]
 
 
 # Follow-up questions that do not provide enough context.
+# These are matched as complete normalized queries,
+# not as individual words inside longer questions.
 AMBIGUOUS_PHRASES = {
     "what about it",
     "tell me more",
@@ -91,10 +96,6 @@ AMBIGUOUS_PHRASES = {
     "more details",
     "help me",
     "can you explain",
-    "tell me about the issue",
-    "tell me about this issue",
-    "tell me about that issue",
-    "explain the issue",
 }
 
 
@@ -141,17 +142,17 @@ def classify_query(query: str) -> dict:
     else:
         comparative_matches = _matches_patterns(
             normalized_query,
-            COMPARATIVE_PATTERNS
+            COMPARATIVE_PATTERNS,
         )
 
         procedural_matches = _matches_patterns(
             normalized_query,
-            PROCEDURAL_PATTERNS
+            PROCEDURAL_PATTERNS,
         )
 
         factual_matches = _matches_patterns(
             normalized_query,
-            FACTUAL_PATTERNS
+            FACTUAL_PATTERNS,
         )
 
         # 3. Comparative intent takes priority.
@@ -191,5 +192,5 @@ def classify_query(query: str) -> dict:
             else "retrieval"
         ),
         "requires_clarification": requires_clarification,
-        "matched_rules": matched_rules
+        "matched_rules": matched_rules,
     }
