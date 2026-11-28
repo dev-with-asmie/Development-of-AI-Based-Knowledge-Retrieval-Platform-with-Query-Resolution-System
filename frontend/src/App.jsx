@@ -1242,7 +1242,7 @@ function App() {
 
           {/* CLARIFICATION REQUEST */}
 
-          {clarificationMessage && (
+          {clarificationMessage && pendingConversationId && (
             <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-5">
               <div className="flex items-center gap-2">
                 <CircleHelp

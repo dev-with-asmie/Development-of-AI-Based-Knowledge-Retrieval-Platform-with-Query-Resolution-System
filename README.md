@@ -35,6 +35,10 @@ The response-generation agent depends on the availability of the external Gemini
 - Overview, Knowledge Base, Ask Documents, Retrieval Explorer, and Evaluation sections.
 - Ask Documents integration with the orchestration endpoint.
 - Displays clarification prompts, generated answers when available, generation notices, and retrieved evidence.
+- Voice input using the Web Speech API.
+- Text-to-speech for generated answers.
+- Conversation-aware follow-up questions.
+- Response transparency panel displaying retrieved evidence, source chunks, relevance scores, and citations.
 
 ### Evaluation and testing
 - Retrieval evaluation using prepared sample documents from academic administration and computer networking domains.
@@ -62,8 +66,6 @@ The response-generation agent depends on the availability of the external Gemini
 
 ### Proposed or not yet implemented
 The following items may appear in the architecture or future-work documentation but should not be considered completed integrations:
-- Persistent conversation memory.
-- Voice interaction using the Web Speech API.
 - PostgreSQL metadata persistence.
 - Docker-based deployment.
 - LangGraph-based orchestration (the current orchestration is implemented as a Python workflow).
@@ -146,6 +148,17 @@ Local uploaded files, Qdrant storage, virtual environments, environment files, a
 - [x] **M2.4** – Clarification Agent
 - [x] **M2.5** – Multi-Agent Orchestration
 
+
+### Milestone 3 – Advanced Query Resolution and User Interaction
+
+- [x] Clarification handling with preservation of the original question and follow-up context.
+- [x] Conversation memory for multi-turn questions and topic changes.
+- [x] Voice input using the Web Speech API.
+- [x] Text-to-speech for generated responses.
+- [x] Response transparency panel with source evidence, relevance scores, and citations.
+
+M3 features were verified through frontend testing and backend automated tests.
+
 The milestone checklist reflects implementation and local testing. External Gemini response generation remains dependent on live API availability.
 
 ## 7. Retrieval Evaluation
@@ -200,10 +213,10 @@ Configure the Gemini API key in the local environment file using the environment
 Start the backend:
 
 ```powershell
-python -m uvicorn backend.app.main:app --reload
+python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8001 --reload
 ```
 
-The backend is available at `http://127.0.0.1:8000`.
+The backend is available at `http://127.0.0.1:8001`.
 
 Interactive API documentation is available at `http://127.0.0.1:8000/docs`.
 

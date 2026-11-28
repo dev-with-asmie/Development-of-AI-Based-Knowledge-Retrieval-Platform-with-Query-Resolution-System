@@ -1,4 +1,3 @@
-
 import re
 
 
@@ -64,6 +63,7 @@ FACTUAL_PATTERNS = [
     r"\bhow many\b",
     r"\bhow much\b",
     r"\bstatus\b",
+    r"\bpriority\b",
     r"\blist\b",
     r"\bshow\b",
     r"\bfind\b",
@@ -72,25 +72,41 @@ FACTUAL_PATTERNS = [
     r"\bdefine\b",
     r"\bmeaning\b",
     r"\bgive me\b",
-    r"\btell me\b",
     r"\bexplain\b",
     r"\breason\b",
     r"\bcause\b",
+    r"\bT-\d+\b",
 ]
 
 
 # Follow-up questions that do not provide enough context.
-# These are matched as complete normalized queries,
-# not as individual words inside longer questions.
+# These are matched as complete normalized queries.
 AMBIGUOUS_PHRASES = {
     "what about it",
+    "what about the issue",
+    "what about this issue",
     "tell me more",
+    "tell me about the issue",
+    "tell me about issue",
+    "tell me about this issue",
+    "tell me about the problem",
+    "tell me about this problem",
+    "tell me about it",
+    "tell me about this",
+    "can you tell me about the issue",
+    "can you tell me about the problem",
     "explain more",
+    "explain the issue",
+    "explain the problem",
+    "describe the issue",
+    "describe the problem",
     "and then",
     "why",
     "how",
     "which one",
     "what is that",
+    "what is the issue",
+    "what is the problem",
     "is it done",
     "any update",
     "more details",
@@ -124,16 +140,16 @@ def classify_query(query: str) -> dict:
     normalized_query = " ".join(query.lower().split())
     normalized_query = re.sub(r"[?!.]+$", "", normalized_query).strip()
 
-    # 1. Detect vague follow-up questions.
+    # 1. Detect vague questions that do not identify a subject.
     if normalized_query in AMBIGUOUS_PHRASES:
         query_type = "ambiguous"
         confidence = 0.95
         matched_rules = ["vague_follow_up"]
 
-    # 2. Detect questions that do not contain enough context.
+    # 2. Detect queries with insufficient context.
     elif (
         len(normalized_query.split()) <= 2
-        and not re.search(r"\bT-\d+\b", normalized_query)
+        and not re.search(r"\bT-\d+\b", normalized_query, re.IGNORECASE)
     ):
         query_type = "ambiguous"
         confidence = 0.85
@@ -173,7 +189,7 @@ def classify_query(query: str) -> dict:
             confidence = 0.90
             matched_rules = factual_matches
 
-        # 6. Unrecognised intent needs clarification.
+        # 6. Unrecognised intent requires clarification.
         else:
             query_type = "ambiguous"
             confidence = 0.55
