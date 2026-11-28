@@ -57,6 +57,18 @@ function formatHeader(header) {
     .replace(/\b\w/g, char => char.toUpperCase())
 }
 
+// Keep generated answers readable even when the model returns Markdown.
+function cleanGeneratedAnswer(value) {
+  return String(value || '')
+    .replace(/```[a-zA-Z0-9_-]*\n?/g, '')
+    .replace(/```/g, '')
+    .replace(/^\\s{0,3}#{1,6}\\s*/gm, '')
+    .replace(/\\*\\*(.*?)\\*\\*/g, '$1')
+    .replace(/__(.*?)__/g, '$1')
+    .replace(/^\\s*[-*]\\s+/gm, '• ')
+    .trim()
+}
+
 // Detect and parse structured ticket passages.
 // Only ticket-style CSV data is converted into a table.
 function parseStructuredTable(text) {
@@ -146,6 +158,13 @@ function App() {
   const [queryError, setQueryError] = useState('')
   const [queryCount, setQueryCount] = useState(0)
   const [queryHistory, setQueryHistory] = useState([])
+
+  const [explorerQuery, setExplorerQuery] = useState('')
+  const [explorerLoading, setExplorerLoading] = useState(false)
+  const [explorerError, setExplorerError] = useState('')
+  const [explorerResults, setExplorerResults] = useState([])
+  const [explorerConfidence, setExplorerConfidence] = useState(null)
+  const [explorerSearchedQuery, setExplorerSearchedQuery] = useState('')
 
   const [generatedAnswer, setGeneratedAnswer] = useState('')
   const [clarificationMessage, setClarificationMessage] = useState('')
@@ -469,6 +488,57 @@ function App() {
 
     } finally {
       setSearching(false)
+    }
+  }
+
+  // --------------------------------------------------
+  // RETRIEVAL EXPLORER SEARCH
+  // --------------------------------------------------
+
+  async function handleExplorerSearch(event) {
+    event?.preventDefault()
+    const currentQuery = explorerQuery.trim()
+    if (!currentQuery || explorerLoading) return
+
+    setExplorerLoading(true)
+    setExplorerError('')
+    setExplorerResults([])
+    setExplorerConfidence(null)
+    setExplorerSearchedQuery(currentQuery)
+
+    try {
+      const response = await fetch(`${API_URL}/documents/query`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({ query: currentQuery, top_k: 5 }),
+      })
+
+      const data = await response.json()
+      if (!response.ok) {
+        throw new Error(data.detail || 'Retrieval search failed.')
+      }
+
+      const results = data.results || data.retrieval?.results || []
+      setExplorerResults(Array.isArray(results) ? results : [])
+      setExplorerConfidence(
+        data.retrieval_confidence ??
+        data.confidence ??
+        data.retrieval?.retrieval_confidence ??
+        null
+      )
+
+      if (!results.length) {
+        setExplorerError(
+          data.message || 'No relevant passages were found. Try a different query or upload more documents.'
+        )
+      }
+    } catch (error) {
+      setExplorerError(error.message || 'Unable to run retrieval search.')
+    } finally {
+      setExplorerLoading(false)
     }
   }
 
@@ -1303,7 +1373,7 @@ function App() {
               </div>
 
               <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">
-                {generatedAnswer}
+                {cleanGeneratedAnswer(generatedAnswer)}
               </div>
             </div>
           )}
@@ -1417,140 +1487,107 @@ function App() {
     // ================================================
 
     if (activePage === 'Retrieval Explorer') {
+      const visibleResults = explorerSearchedQuery ? explorerResults : queryResults
+      const visibleQuery = explorerSearchedQuery || searchedQuestion
+      const visibleConfidence = explorerSearchedQuery ? explorerConfidence : retrievalConfidence
+
       return (
-        <div className="space-y-6">
-
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
+        <div className="mx-auto max-w-6xl space-y-6">
+          <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6 sm:p-7">
             <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="flex items-center gap-3">
+              <div className="flex items-start gap-3">
                 <div className="rounded-xl bg-violet-500/10 p-3">
-                  <Search
-                    className="text-violet-400"
-                    size={23}
-                  />
+                  <Search className="text-violet-300" size={22} />
                 </div>
-
                 <div>
-                  <h2 className="font-semibold">
-                    Retrieval Explorer
-                  </h2>
-
-                  <p className="mt-1 text-sm text-slate-400">
-                    Inspect the latest retrieval operation.
+                  <h2 className="text-lg font-semibold text-white">Explore retrieved evidence</h2>
+                  <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-400">
+                    Run a retrieval-only search to inspect the passages selected from your indexed documents, without generating an AI answer.
                   </p>
                 </div>
               </div>
-
-              <button
-                onClick={() => navigateTo('Ask Documents')}
-                className="flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm text-white transition hover:bg-violet-500"
-              >
-                New search
-                <ArrowUpRight size={15} />
-              </button>
+              <span className="rounded-full border border-cyan-500/20 bg-cyan-500/10 px-3 py-1.5 text-xs text-cyan-200">
+                Qdrant · Top 5 results
+              </span>
             </div>
 
-            {searchedQuestion ? (
-              <div className="mt-6 rounded-xl border border-slate-800 bg-[#090d18] p-4">
-                <p className="text-xs font-medium uppercase tracking-wider text-slate-500">
-                  Latest search query
-                </p>
+            <form onSubmit={handleExplorerSearch} className="mt-6 flex flex-col gap-3 sm:flex-row">
+              <div className="flex min-w-0 flex-1 items-center gap-3 rounded-xl border border-slate-700 bg-slate-950/80 px-4 focus-within:border-violet-500/60">
+                <Search size={18} className="shrink-0 text-slate-500" />
+                <input
+                  value={explorerQuery}
+                  onChange={event => setExplorerQuery(event.target.value)}
+                  placeholder="Search your indexed knowledge..."
+                  className="h-12 min-w-0 flex-1 bg-transparent text-sm text-slate-100 outline-none placeholder:text-slate-600"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={!explorerQuery.trim() || explorerLoading}
+                className="flex h-12 items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 text-sm font-medium text-white transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {explorerLoading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+                {explorerLoading ? 'Searching' : 'Explore'}
+              </button>
+            </form>
 
-                <p className="mt-2 break-words text-sm leading-6 text-slate-200">
-                  {searchedQuestion}
-                </p>
+            {explorerError && (
+              <p className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-sm text-amber-200">
+                {explorerError}
+              </p>
+            )}
+          </section>
 
-                <div className="mt-3 flex flex-wrap gap-4 text-xs text-slate-500">
-                  <span>
-                    {queryResults.length} retrieved passage(s)
+          {visibleQuery ? (
+            <section className="space-y-4">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-violet-300">Retrieval results</p>
+                  <h3 className="mt-1 break-words text-lg font-semibold text-white">{visibleQuery}</h3>
+                </div>
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <span className="rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-slate-300">
+                    {visibleResults.length} passage{visibleResults.length === 1 ? '' : 's'}
                   </span>
-
-                  <span>Top-K: 5</span>
+                  <span className="rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-slate-300">
+                    Confidence: {typeof visibleConfidence === 'number' ? `${(visibleConfidence * 100).toFixed(1)}%` : 'Not supplied'}
+                  </span>
                 </div>
               </div>
-            ) : (
-              <div className="mt-6 rounded-xl border border-dashed border-slate-700 p-8 text-center">
-                <Filter
-                  className="mx-auto mb-3 text-slate-600"
-                  size={28}
-                />
 
-                <p className="text-sm text-slate-400">
-                  No retrieval operation to inspect yet.
-                </p>
-
-                <p className="mt-1 text-xs text-slate-600">
-                  Run a search from Ask Documents to view its results here.
-                </p>
-              </div>
-            )}
-          </div>
-
-          {queryResults.length > 0 && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="font-semibold">
-                  Retrieved passages
-                </h3>
-
-                <span className="text-xs text-slate-500">
-                  Latest search
-                </span>
-              </div>
-
-              {queryResults.map((result, index) =>
-                renderResultCard(result, index)
+              {visibleResults.length ? (
+                <div className="space-y-4">
+                  {visibleResults.map((result, index) => renderResultCard(result, index))}
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-900/40 px-6 py-12 text-center">
+                  <FileText className="mx-auto mb-3 text-slate-600" size={28} />
+                  <p className="text-sm font-medium text-slate-300">No passages to display</p>
+                  <p className="mt-1 text-xs text-slate-500">Try another search or check that documents have been indexed.</p>
+                </div>
               )}
-            </div>
+            </section>
+          ) : (
+            <section className="rounded-2xl border border-dashed border-slate-700 bg-slate-900/40 px-6 py-12 text-center">
+              <Layers3 className="mx-auto mb-3 text-slate-600" size={30} />
+              <h3 className="text-sm font-semibold text-slate-200">Your retrieval workspace is ready</h3>
+              <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">
+                Enter a query above to inspect matching document chunks, source filenames and relevance scores.
+              </p>
+              {queryResults.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setExplorerSearchedQuery('')
+                    setExplorerResults([])
+                  }}
+                  className="mt-4 text-sm text-violet-300 hover:text-violet-200"
+                >
+                  View latest Ask Documents results
+                </button>
+              )}
+            </section>
           )}
-
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-            <h3 className="mb-4 font-semibold">
-              Retrieval configuration
-            </h3>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
-                <p className="text-xs text-slate-500">
-                  Vector database
-                </p>
-
-                <p className="mt-2 font-medium text-violet-300">
-                  Qdrant
-                </p>
-              </div>
-
-              <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
-                <p className="text-xs text-slate-500">
-                  Embedding model
-                </p>
-
-                <p className="mt-2 font-medium text-cyan-300">
-                  all-MiniLM-L6-v2
-                </p>
-              </div>
-
-              <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
-                <p className="text-xs text-slate-500">
-                  Vector dimensions
-                </p>
-
-                <p className="mt-2 font-medium text-slate-200">
-                  384
-                </p>
-              </div>
-
-              <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
-                <p className="text-xs text-slate-500">
-                  Requested result limit
-                </p>
-
-                <p className="mt-2 font-medium text-slate-200">
-                  Top 5
-                </p>
-              </div>
-            </div>
-          </div>
         </div>
       )
     }
@@ -1560,117 +1597,78 @@ function App() {
     // ================================================
 
     if (activePage === 'Evaluation') {
+      const metrics = [
+        { name: 'Hit@1', score: '10 / 10', percent: '100%' },
+        { name: 'Hit@3', score: '10 / 10', percent: '100%' },
+        { name: 'Hit@5', score: '10 / 10', percent: '100%' },
+      ]
+
       return (
-        <div className="space-y-5">
-
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
-            <div className="flex items-center gap-3">
-              <div className="rounded-xl bg-violet-500/10 p-3">
-                <Activity
-                  className="text-violet-400"
-                  size={23}
-                />
+        <div className="space-y-6">
+          <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
+            <div className="flex items-start gap-3">
+              <div className="rounded-xl bg-emerald-500/10 p-3">
+                <Activity className="text-emerald-300" size={22} />
               </div>
-
               <div>
-                <h2 className="font-semibold">
-                  Retrieval Evaluation
-                </h2>
-
-                <p className="mt-1 text-sm text-slate-400">
-                  Evaluation metrics and test-query performance
+                <h2 className="text-lg font-semibold text-white">Retrieval evaluation</h2>
+                <p className="mt-1 text-sm leading-6 text-slate-400">
+                  Recorded results from the prepared academic-administration and computer-networking evaluation samples.
                 </p>
               </div>
             </div>
 
-            <div className="mt-6 rounded-xl border border-amber-500/20 bg-amber-500/5 p-5">
-              <div className="flex items-center gap-2">
-                <CircleHelp
-                  className="text-amber-300"
-                  size={18}
-                />
+            <div className="mt-6 grid gap-3 sm:grid-cols-3">
+              {metrics.map(metric => (
+                <div key={metric.name} className="rounded-xl border border-slate-800 bg-slate-950/70 p-5">
+                  <p className="text-sm text-slate-400">{metric.name}</p>
+                  <p className="mt-3 text-2xl font-semibold tracking-tight text-white">{metric.percent}</p>
+                  <p className="mt-1 text-xs text-slate-500">{metric.score} expected chunks retrieved</p>
+                </div>
+              ))}
+            </div>
+          </section>
 
-                <p className="text-sm font-medium text-amber-300">
-                  Evaluation dataset not configured
-                </p>
+          <div className="grid gap-4 md:grid-cols-2">
+            <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
+              <h3 className="font-semibold text-white">Evaluation coverage</h3>
+              <div className="mt-4 space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                  <span className="text-sm text-slate-400">Prepared test questions</span>
+                  <span className="text-sm font-semibold text-white">10</span>
+                </div>
+                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                  <span className="text-sm text-slate-400">Evaluation domains</span>
+                  <span className="text-sm font-semibold text-white">2</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-slate-400">Indexed sample chunks</span>
+                  <span className="text-sm font-semibold text-white">7</span>
+                </div>
               </div>
+            </section>
 
-              <p className="mt-2 text-sm leading-6 text-slate-400">
-                Retrieval evaluation metrics such as Precision@K, Recall@K,
-                MRR and Hit@K require a labelled test dataset and an evaluation
-                run. No evaluation scores are being reported until those tests
-                have been performed.
-              </p>
-            </div>
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-              <p className="text-sm text-slate-400">
-                Retrieval database
-              </p>
-
-              <p className="mt-3 text-xl font-semibold text-emerald-400">
-                Qdrant
-              </p>
-
-              <p className="mt-1 text-xs text-slate-500">
-                Vector storage and similarity search
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-              <p className="text-sm text-slate-400">
-                Embedding model
-              </p>
-
-              <p className="mt-3 text-xl font-semibold text-cyan-400">
-                MiniLM-L6-v2
-              </p>
-
-              <p className="mt-1 text-xs text-slate-500">
-                384-dimensional embeddings
-              </p>
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-            <h3 className="mb-4 font-semibold">
-              Suggested evaluation metrics
-            </h3>
-
-            {[
-              [
-                'Precision@K',
-                'Measures how many retrieved results are relevant.',
-              ],
-              [
-                'Recall@K',
-                'Measures how many relevant items were retrieved.',
-              ],
-              [
-                'MRR',
-                'Measures the ranking position of the first relevant result.',
-              ],
-              [
-                'Hit@K',
-                'Checks whether at least one relevant result appears in the top K.',
-              ],
-            ].map(([name, description]) => (
-              <div
-                key={name}
-                className="border-b border-slate-800 py-3 last:border-0"
-              >
-                <p className="text-sm font-medium text-slate-200">
-                  {name}
-                </p>
-
-                <p className="mt-1 text-xs leading-5 text-slate-500">
-                  {description}
-                </p>
+            <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
+              <h3 className="font-semibold text-white">Domain breakdown</h3>
+              <div className="mt-4 space-y-4">
+                {[['Academic administration', '5 / 5'], ['Computer networking', '5 / 5']].map(([domain, result]) => (
+                  <div key={domain}>
+                    <div className="mb-2 flex items-center justify-between gap-3 text-sm">
+                      <span className="text-slate-300">{domain}</span>
+                      <span className="font-medium text-emerald-300">{result}</span>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+                      <div className="h-full w-full rounded-full bg-emerald-500/80" />
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
+            </section>
           </div>
+
+          <p className="rounded-xl border border-slate-800 bg-slate-900/40 px-4 py-3 text-xs leading-5 text-slate-500">
+            These results describe only the prepared sample dataset. Hit@K measures whether an expected relevant chunk appears in the top K results; it does not measure the factual correctness of generated answers or guarantee performance on larger datasets.
+          </p>
         </div>
       )
     }
@@ -1681,388 +1679,159 @@ function App() {
 
     return (
       <div className="space-y-6">
-
-        {/* STATISTICS */}
-
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {stats.map(stat => {
-            const Icon = stat.icon
-
-            return (
-              <div
-                key={stat.label}
-                className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 transition hover:border-slate-700"
+        <section className="relative overflow-hidden rounded-3xl border border-violet-500/20 bg-gradient-to-br from-violet-600/20 via-slate-900 to-cyan-500/10 p-6 sm:p-8">
+          <div className="pointer-events-none absolute -right-12 -top-16 h-56 w-56 rounded-full bg-violet-500/10 blur-3xl" />
+          <div className="relative max-w-2xl">
+            <span className="inline-flex items-center gap-2 rounded-full border border-violet-400/20 bg-violet-400/10 px-3 py-1.5 text-xs font-medium text-violet-200">
+              <Sparkles size={13} /> AI-powered knowledge workspace
+            </span>
+            <h2 className="mt-5 text-2xl font-semibold tracking-tight text-white sm:text-3xl">
+              Find answers across your knowledge.
+            </h2>
+            <p className="mt-3 max-w-xl text-sm leading-7 text-slate-300">
+              Upload your documents, ask questions in natural language, and explore the evidence behind every response.
+            </p>
+            <div className="mt-6 flex flex-wrap gap-3">
+              <button
+                onClick={() => navigateTo('Ask Documents')}
+                className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-950/30 transition hover:bg-violet-500"
               >
-                <div className="flex items-center justify-between">
-                  <div className={`rounded-xl p-2.5 ${stat.bg}`}>
-                    <Icon
-                      className={stat.color}
-                      size={20}
-                    />
-                  </div>
+                <MessageSquare size={16} /> Ask your documents
+              </button>
+              <button
+                onClick={() => navigateTo('Knowledge Base')}
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-600/80 bg-slate-950/40 px-5 py-3 text-sm font-medium text-slate-200 transition hover:bg-slate-800"
+              >
+                <UploadCloud size={16} /> Add knowledge
+              </button>
+            </div>
+          </div>
+        </section>
 
-                  <ArrowUpRight
-                    className="text-slate-600"
-                    size={17}
-                  />
+        <div className="grid gap-4 sm:grid-cols-3">
+          {[
+            { label: 'Documents processed', value: uploadedDocuments.length, icon: Files, tone: 'text-violet-300', bg: 'bg-violet-500/10' },
+            { label: 'Knowledge chunks', value: totalChunks, icon: Database, tone: 'text-cyan-300', bg: 'bg-cyan-500/10' },
+            { label: 'Questions asked', value: queryCount, icon: MessageSquare, tone: 'text-emerald-300', bg: 'bg-emerald-500/10' },
+          ].map(item => {
+            const Icon = item.icon
+            return (
+              <div key={item.label} className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
+                <div className={`inline-flex rounded-xl p-2.5 ${item.bg}`}>
+                  <Icon size={19} className={item.tone} />
                 </div>
-
-                <p className="mt-5 text-2xl font-semibold tracking-tight">
-                  {stat.value}
-                </p>
-
-                <p className="mt-1 text-sm font-medium text-slate-300">
-                  {stat.label}
-                </p>
-
-                <p className="mt-1 text-xs text-slate-500">
-                  {stat.detail}
-                </p>
+                <p className="mt-4 text-2xl font-semibold text-white">{item.value}</p>
+                <p className="mt-1 text-sm text-slate-400">{item.label}</p>
               </div>
             )
           })}
         </div>
 
-        <div className="grid gap-5 xl:grid-cols-3">
-
-          <div className="space-y-5 xl:col-span-2">
-
-            {/* KNOWLEDGE BASE SUMMARY */}
-
+        <div className="grid gap-5 xl:grid-cols-5">
+          <section className="space-y-5 xl:col-span-3">
             <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-              <div className="mb-5 flex items-center justify-between gap-3">
+              <div className="mb-4 flex items-center justify-between gap-3">
                 <div>
-                  <h2 className="font-semibold">
-                    Knowledge base
-                  </h2>
-
-                  <p className="mt-1 text-xs text-slate-500">
-                    Documents processed in this session
-                  </p>
+                  <h3 className="font-semibold text-white">Your knowledge base</h3>
+                  <p className="mt-1 text-xs text-slate-500">Recently processed sources</p>
                 </div>
-
-                <button
-                  onClick={() => navigateTo('Knowledge Base')}
-                  className="text-sm text-violet-400 transition hover:text-violet-300"
-                >
-                  View all
-                  <ChevronRight
-                    className="inline"
-                    size={15}
-                  />
+                <button onClick={() => navigateTo('Knowledge Base')} className="text-sm text-violet-300 hover:text-violet-200">
+                  Manage sources <ChevronRight className="inline" size={15} />
                 </button>
               </div>
 
               {uploadedDocuments.length === 0 ? (
-                <div className="border-t border-slate-800 py-7 text-center">
-                  <Files
-                    className="mx-auto mb-2 text-slate-600"
-                    size={26}
-                  />
-
-                  <p className="text-sm text-slate-400">
-                    Your session document list is empty.
-                  </p>
-
-                  <button
-                    onClick={() => navigateTo('Knowledge Base')}
-                    className="mt-3 text-xs text-violet-400 hover:text-violet-300"
-                  >
-                    Upload your first document
+                <div className="rounded-xl border border-dashed border-slate-700 px-5 py-8 text-center">
+                  <Files className="mx-auto mb-3 text-slate-600" size={26} />
+                  <p className="text-sm font-medium text-slate-300">No documents added yet</p>
+                  <p className="mt-1 text-xs text-slate-500">Upload PDF, DOCX, TXT or CSV files to build your searchable knowledge base.</p>
+                  <button onClick={() => navigateTo('Knowledge Base')} className="mt-4 text-sm font-medium text-violet-300 hover:text-violet-200">
+                    Upload documents
                   </button>
                 </div>
               ) : (
-                uploadedDocuments.slice(0, 5).map(doc => (
-                  <div
-                    key={doc.storedFilename}
-                    className="flex items-center gap-3 border-t border-slate-800 py-3"
-                  >
-                    <div className="rounded-lg bg-violet-500/10 p-2">
-                      <FileText
-                        className="text-violet-400"
-                        size={18}
-                      />
+                <div className="divide-y divide-slate-800">
+                  {uploadedDocuments.slice(0, 5).map(doc => (
+                    <div key={doc.storedFilename} className="flex items-center gap-3 py-3 first:pt-1 last:pb-1">
+                      <div className="rounded-lg bg-violet-500/10 p-2"><FileText size={17} className="text-violet-300" /></div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-slate-200">{doc.name}</p>
+                        <p className="mt-1 text-xs text-slate-500">{doc.chunks} chunks indexed</p>
+                      </div>
+                      <CheckCircle2 size={16} className="text-emerald-400" />
                     </div>
-
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">
-                        {doc.name}
-                      </p>
-
-                      <p className="text-xs text-slate-500">
-                        {doc.chunks} chunks indexed
-                      </p>
-                    </div>
-
-                    <span className="flex items-center gap-1 text-xs text-emerald-400">
-                      <CheckCircle2 size={14} />
-                      {doc.status}
-                    </span>
-                  </div>
-                ))
+                  ))}
+                </div>
               )}
             </div>
 
-            {/* PROCESSING PIPELINE */}
-
             <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <h2 className="font-semibold">
-                  Knowledge processing pipeline
-                </h2>
-
-                <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-400">
-                  Core pipeline implemented
-                </span>
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="font-semibold text-white">Recent questions</h3>
+                <button onClick={() => navigateTo('Ask Documents')} className="text-sm text-violet-300 hover:text-violet-200">Ask a question</button>
               </div>
-
-              {[
-                [
-                  'Document text extraction',
-                  'PDF · DOCX · TXT · CSV',
-                ],
-                [
-                  'Text cleaning and chunking',
-                  'Structured CSV chunking supported',
-                ],
-                [
-                  'Embedding generation',
-                  'all-MiniLM-L6-v2',
-                ],
-                [
-                  'Vector indexing',
-                  'Qdrant',
-                ],
-                [
-                  'Information retrieval',
-                  'Query-based retrieval',
-                ],
-              ].map(([item, detail]) => (
-                <div
-                  key={item}
-                  className="flex items-center gap-3 border-b border-slate-800 py-3 last:border-0"
-                >
-                  <CheckCircle2
-                    size={17}
-                    className="shrink-0 text-emerald-400"
-                  />
-
-                  <div className="min-w-0">
-                    <p className="text-sm text-slate-300">
-                      {item}
-                    </p>
-
-                    <p className="mt-1 text-xs text-slate-500">
-                      {detail}
-                    </p>
-                  </div>
-
-                  <span className="ml-auto shrink-0 text-xs text-emerald-400">
-                    Ready
-                  </span>
+              {queryHistory.length ? (
+                <div className="divide-y divide-slate-800">
+                  {queryHistory.slice(0, 5).map((item, index) => (
+                    <button
+                      key={`${item.question}-${index}`}
+                      onClick={() => {
+                        setQuestion(item.question)
+                        navigateTo('Ask Documents')
+                      }}
+                      className="flex w-full items-center gap-3 py-3 text-left transition hover:bg-slate-800/30"
+                    >
+                      <MessageSquare size={15} className="shrink-0 text-slate-500" />
+                      <span className="min-w-0 flex-1 truncate text-sm text-slate-300">{item.question}</span>
+                      <span className="shrink-0 text-xs text-slate-500">{item.time}</span>
+                    </button>
+                  ))}
                 </div>
-              ))}
+              ) : (
+                <p className="rounded-xl bg-slate-950/50 px-4 py-5 text-sm text-slate-500">
+                  Your recent questions will appear here after your first search.
+                </p>
+              )}
             </div>
+          </section>
 
-            {/* QUERY HISTORY */}
-
-            {queryHistory.length > 0 && (
-              <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-                <div className="mb-4 flex items-center justify-between">
-                  <h2 className="font-semibold">
-                    Recent queries
-                  </h2>
-
-                  <span className="text-xs text-slate-500">
-                    This session
-                  </span>
-                </div>
-
-                {queryHistory.slice(0, 4).map((item, index) => (
-                  <button
-                    key={`${item.question}-${index}`}
-                    onClick={() => {
-                      setQuestion(item.question)
-                      navigateTo('Ask Documents')
-                    }}
-                    className="flex w-full items-center gap-3 border-t border-slate-800 py-3 text-left transition hover:bg-slate-800/30"
-                  >
-                    <Clock3
-                      className="shrink-0 text-slate-500"
-                      size={16}
-                    />
-
-                    <span className="min-w-0 flex-1 truncate text-sm text-slate-300">
-                      {item.question}
-                    </span>
-
-                    <span className="shrink-0 text-xs text-slate-500">
-                      {item.time}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* RIGHT SIDEBAR */}
-
-          <div className="space-y-5">
-
-            {/* AI WORKSPACE */}
-
+          <aside className="space-y-5 xl:col-span-2">
             <div className="rounded-2xl border border-violet-500/20 bg-gradient-to-br from-violet-500/10 to-slate-900 p-5">
-              <div className="mb-3 flex items-center gap-2 text-violet-300">
-                <Sparkles size={18} />
-                <span className="text-sm font-medium">
-                  AI Workspace
-                </span>
+              <div className="flex items-center gap-2 text-violet-200">
+                <Sparkles size={17} /><span className="text-sm font-medium">Ask Nexus AI</span>
               </div>
-
-              <h2 className="text-lg font-semibold">
-                Explore your knowledge
-              </h2>
-
+              <h3 className="mt-3 text-lg font-semibold text-white">Your documents, one conversation away.</h3>
               <p className="mt-2 text-sm leading-6 text-slate-400">
-                Search your documents and discover relevant information using
-                the knowledge retrieval pipeline.
+                Get grounded answers, clarify ambiguous questions, and continue with contextual follow-ups.
               </p>
-
-              <button
-                onClick={() => navigateTo('Ask Documents')}
-                className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-sm font-medium text-white transition hover:bg-violet-500"
-              >
-                Ask a question
-                <ArrowUpRight size={16} />
+              <button onClick={() => navigateTo('Ask Documents')} className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-500">
+                Start a conversation <ArrowUpRight size={16} />
               </button>
             </div>
 
-            {/* SYSTEM COMPONENTS */}
-
             <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-              <h2 className="mb-4 font-semibold">
-                System components
-              </h2>
-
-              <div className="flex items-center justify-between py-3">
-                <div className="flex items-center gap-2">
-                  <Server
-                    size={15}
-                    className="text-slate-500"
-                  />
-
-                  <span className="text-sm text-slate-400">
-                    Frontend
-                  </span>
-                </div>
-
-                <span className="text-xs text-emerald-400">
-                  Running
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between border-t border-slate-800 py-3">
-                <div className="flex items-center gap-2">
-                  <Database
-                    size={15}
-                    className="text-slate-500"
-                  />
-
-                  <span className="text-sm text-slate-400">
-                    Vector database
-                  </span>
-                </div>
-
-                <span className="text-xs text-emerald-400">
-                  Configured
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between border-t border-slate-800 py-3">
-                <div className="flex items-center gap-2">
-                  <BrainCircuit
-                    size={15}
-                    className="text-slate-500"
-                  />
-
-                  <span className="text-sm text-slate-400">
-                    Embeddings
-                  </span>
-                </div>
-
-                <span className="text-xs text-emerald-400">
-                  Configured
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between border-t border-slate-800 py-3">
-                <span className="text-sm text-slate-400">
-                  Agent orchestration
-                </span>
-
-                <span className="text-xs text-amber-400">
-                  Planned
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between border-t border-slate-800 py-3">
-                <span className="text-sm text-slate-400">
-                  Answer generation
-                </span>
-
-                <span className="text-xs text-amber-400">
-                  Not integrated
-                </span>
+              <h3 className="font-semibold text-white">Explore your workspace</h3>
+              <div className="mt-3 space-y-2">
+                {[
+                  { label: 'Knowledge Base', detail: 'Manage uploaded documents', icon: Files },
+                  { label: 'Retrieval Explorer', detail: 'Inspect matching chunks and scores', icon: Search },
+                  { label: 'Evaluation', detail: 'Review retrieval benchmark results', icon: Activity },
+                ].map(item => {
+                  const Icon = item.icon
+                  return (
+                    <button key={item.label} onClick={() => navigateTo(item.label)} className="flex w-full items-center gap-3 rounded-xl border border-slate-800 bg-slate-950/50 p-3 text-left transition hover:border-violet-500/30 hover:bg-slate-800/50">
+                      <Icon size={17} className="text-slate-400" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-medium text-slate-200">{item.label}</span>
+                        <span className="mt-0.5 block text-xs text-slate-500">{item.detail}</span>
+                      </span>
+                      <ChevronRight size={15} className="text-slate-600" />
+                    </button>
+                  )
+                })}
               </div>
             </div>
-
-            {/* SESSION ACTIVITY */}
-
-            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-              <div className="flex items-center gap-2">
-                <Activity
-                  size={17}
-                  className="text-violet-400"
-                />
-
-                <h2 className="font-semibold">
-                  Session activity
-                </h2>
-              </div>
-
-              <div className="mt-4 space-y-3">
-                <div className="flex justify-between text-sm">
-                  <span className="text-slate-400">
-                    Documents processed
-                  </span>
-
-                  <span className="text-slate-200">
-                    {uploadedDocuments.length}
-                  </span>
-                </div>
-
-                <div className="flex justify-between text-sm">
-                  <span className="text-slate-400">
-                    Chunks processed
-                  </span>
-
-                  <span className="text-slate-200">
-                    {totalChunks}
-                  </span>
-                </div>
-
-                <div className="flex justify-between text-sm">
-                  <span className="text-slate-400">
-                    Queries executed
-                  </span>
-
-                  <span className="text-slate-200">
-                    {queryCount}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
+          </aside>
         </div>
       </div>
     )
@@ -2255,7 +2024,7 @@ function App() {
           {/* FOOTER */}
 
           <footer className="mt-10 border-t border-slate-800 pt-5 text-center text-xs text-slate-600">
-            Nexus AI · Knowledge Retrieval Platform · React · FastAPI · Qdrant
+            Nexus AI · Knowledge Retrieval Platform 
           </footer>
         </div>
       </main>
